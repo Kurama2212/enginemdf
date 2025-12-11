@@ -13,7 +13,7 @@ from enginemdf.io.mdf_reader import (
 
 
 # Path to the test MDF file
-TEST_MDF_FILE = Path(__file__).parent / "files" / "M21J_250806_M21J21_02B01_01_I5.24455.mf4"
+TEST_MDF_FILE = Path(__file__).parent / "files" / "mdf_test.mf4"
 
 
 @pytest.fixture
