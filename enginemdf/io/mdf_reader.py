@@ -124,6 +124,21 @@ class RawChannelData:
     values: "np.ndarray"
 
 
+@dataclass
+class MetaChannelInfo:
+    """
+    Lightweight description of channels that are not exposed as regular
+    logical time-series (e.g. zero-sample channels, event/meta channels, etc.).
+    """
+
+    group_index: int
+    channel_index: int
+    name: str
+    unit: str | None
+    n_samples: int
+    source_path: str
+
+
 _MEAS_RE = re.compile(r"^(?P<key>[A-Za-z]+)(?:\[(?P<idx>\d+)\])?$")
 
 
@@ -189,7 +204,7 @@ class AsammdfReader:
                 # `source_path` naming convention is MDF/Concerto-specific;
                 # we try a few attribute names and fall back to "".
                 source_path = (
-                    getattr(channel, "source_path", None)
+                    getattr(getattr(channel, "source", None), "path", None)
                     or getattr(channel, "source", None)
                     or ""
                 )
@@ -200,13 +215,30 @@ class AsammdfReader:
                     def _loader() -> tuple[np.ndarray, np.ndarray]:
                         sig = self._mdf.get(group=g_i, index=c_i)
                         # asammdf Signal interface: timestamps & samples
-                        t = sig.timestamps
+                        t = sig.timestamps.astype(float)
                         v = sig.samples
                         return t, v
 
                     return _loader
 
-                # t_start / t_end left as None for now (lazy evaluation possible later)
+                # --- calcolo robusto di n_samples ---
+                if hasattr(channel, "samples_count"):
+                    # vecchie versioni / API diverse (se mai presenti)
+                    n_samples = channel.samples_count
+                else:
+                    # asammdf moderno: usa il ChannelGroup
+                    cg = getattr(group, "channel_group", None)
+                    n_samples = getattr(cg, "cycles_nr", None) if cg is not None else None
+                    if n_samples is None:
+                        # fallback: leggi una volta il segnale
+                        sig = self._mdf.get(group=group_index, index=channel_index)
+                        n_samples = len(sig.timestamps)
+
+                n_samples = int(n_samples)
+                # Skip channels with no samples to avoid empty logical channels downstream.
+                if n_samples == 0:
+                    continue
+                # t_start / t_end lasciati None per ora (lazy evaluation possibile dopo)
                 seg = RawSegmentInfo(
                     measurement_name=meas_name,
                     key=key,
@@ -214,7 +246,7 @@ class AsammdfReader:
                     source_path=source_path,
                     channel_name=channel.name,
                     unit=channel.unit,
-                    n_samples=channel.samples_count,
+                    n_samples=n_samples,
                     t_start=None,
                     t_end=None,
                     group_index=group_index,
@@ -224,6 +256,8 @@ class AsammdfReader:
 
                 temp_segments[(key, channel.name)].append(seg)
 
+        self._segments = temp_segments
+
         # Build RawChannelInfo objects from collected segments
         for (key, ch_name), segments in temp_segments.items():
             # Order segments by index (RecResult[1], [2], ...)
@@ -231,12 +265,62 @@ class AsammdfReader:
                 segments,
                 key=lambda s: (s.index if s.index is not None else -1),
             )
-            unit = ordered[0].unit if ordered else None
+
+            # Compute a global, monotonic timebase for all segments of this logical channel.
+            # We treat each segment's local timebase as relative (starting from its first sample)
+            # and concatenate them one after the other.
+            time_offset = 0.0
+            non_empty_segments: list[RawSegmentInfo] = []
+            for seg in ordered:
+                # Load the raw (unshifted) timebase once to estimate the segment duration.
+                t_local, _ = seg.loader()
+                t_local = t_local.astype(float)
+
+                if t_local.size == 0:
+                    # Ignore completely empty segments
+                    continue
+
+                # Robust duration: last minus first sample.
+                duration = float(t_local[-1] - t_local[0])
+
+                # Assign global t_start / t_end based on cumulative offset.
+                seg.t_start = time_offset
+                seg.t_end = time_offset + duration
+                time_offset = seg.t_end
+
+                # Now wrap the loader so that it returns a global, monotonic timebase.
+                g_i = seg.group_index
+                c_i = seg.channel_index
+                t0 = seg.t_start
+
+                def make_shifted_loader(g_i: int = g_i, c_i: int = c_i, t0: float = t0):
+                    def _loader() -> tuple[np.ndarray, np.ndarray]:
+                        sig = self._mdf.get(group=g_i, index=c_i)
+                        t = sig.timestamps.astype(float)
+                        v = sig.samples
+
+                        if t.size > 0:
+                            # Rebase local time to start at 0, then shift by global offset.
+                            t = t - t[0]
+                            t = t + t0
+                        return t, v
+
+                    return _loader
+
+                seg.loader = make_shifted_loader()
+                non_empty_segments.append(seg)
+
+            # If, after filtering, there are no non-empty segments for this logical channel,
+            # skip creating a RawChannelInfo for it.
+            if not non_empty_segments:
+                continue
+
+            unit = non_empty_segments[0].unit
 
             ch_info = RawChannelInfo(
                 logical_name=ch_name,
                 key=key,
-                segments=ordered,
+                segments=non_empty_segments,
                 unit=unit,
                 dtype=None,
             )
@@ -270,6 +354,63 @@ class AsammdfReader:
         available, otherwise the first available key.
         """
         return list(self._logical_index.values())
+
+    def list_metadata_channels(self) -> List[MetaChannelInfo]:
+        """List channels that are treated as 'metadata' or non-time-series by this reader.
+
+        Heuristic:
+        - channels with zero samples (n_samples == 0), or
+        - channels whose timestamps array is empty.
+        These channels are not exposed via list_channels()/read_channels(),
+        but can still be inspected if needed.
+        """
+        meta: List[MetaChannelInfo] = []
+
+        for group_index, group in enumerate(self._mdf.groups):
+            for channel_index, channel in enumerate(group.channels):
+                # Same source_path heuristic as in _build_index
+                source_path = (
+                    getattr(getattr(channel, "source", None), "path", None)
+                    or getattr(channel, "source", None)
+                    or ""
+                )
+
+                # --- calcolo robusto di n_samples (copiato da _build_index) ---
+                if hasattr(channel, "samples_count"):
+                    n_samples = channel.samples_count
+                else:
+                    cg = getattr(group, "channel_group", None)
+                    n_samples = getattr(cg, "cycles_nr", None) if cg is not None else None
+                    if n_samples is None:
+                        sig = self._mdf.get(group=group_index, index=channel_index)
+                        n_samples = len(sig.timestamps)
+
+                n_samples = int(n_samples)
+
+                # Classifica come metadata se nessun sample o timestamps vuoti
+                is_meta = False
+                if n_samples == 0:
+                    is_meta = True
+                else:
+                    sig = self._mdf.get(group=group_index, index=channel_index)
+                    if sig.timestamps.size == 0:
+                        is_meta = True
+
+                if not is_meta:
+                    continue
+
+                meta.append(
+                    MetaChannelInfo(
+                        group_index=group_index,
+                        channel_index=channel_index,
+                        name=channel.name,
+                        unit=getattr(channel, "unit", None),
+                        n_samples=n_samples,
+                        source_path=source_path,
+                    )
+                )
+
+        return meta
 
     def read_channels(
         self,
