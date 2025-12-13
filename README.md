@@ -1,76 +1,105 @@
 # enginemdf
 
-`enginemdf` is a lightweight, Python‑first interface designed to simplify the exploration and analysis of **AVL CONCERTO–extracted MDF files**.  
-The goal is to provide a clean, intuitive API on top of `asammdf`, optimized for real automotive datasets containing long time‑series, many sensors, and multi‑segment acquisitions.
+`enginemdf` is a lightweight, Python-first interface designed to simplify the exploration and analysis of **AVL CONCERTO–extracted MDF files**.  
+The goal is to provide a clean, intuitive API on top of `asammdf`, optimized for real automotive datasets containing long time-series, many sensors, and multi-segment acquisitions.
 
-This project is currently in **early development** and serves both as an open‑source learning exercise and as a portfolio project.
+This project is currently in **early development** and serves both as an open-source learning exercise and as a portfolio project.
 
 ---
 
 ## 🚧 Current Status (WIP)
 
-- Basic project structure defined (`io`, `core`, `utils`, etc.)
-- First implementation of **RawSegmentInfo**, a data structure describing MDF logical segments
-- Early prototype of the I/O layer that:
-  - Parses MDF file structure
-  - Exposes segment metadata
-  - Supports lazy loading (loader functions return only the requested segment)
+The project has moved beyond a pure prototype and now includes a first stable **core layer**.
 
-Many components are still placeholders and the public API is not stable.
+### Implemented
+- Clear project structure (`io`, `core`, `utils`, `test`)
+- **Core abstractions**:
+  - `TimeSeries`: immutable time base with slicing, masking and consistency checks
+  - `Channel`: logical signal abstraction combining data, time axis and metadata
+- Strong validation and explicit error handling
+- First unit test suite with `pytest`
+- Early MDF parsing utilities and segment metadata discovery
+
+### In Progress
+- Integration between MDF segments and `Channel` / `TimeSeries`
+- Stabilization of the public API
+- Performance tuning on real-world automotive datasets
+
+The API is still evolving and **breaking changes are expected**.
+
+---
+
+## 🧠 Design Principles
+
+- **Explicit over implicit**: no hidden assumptions on time bases or alignment
+- **Metadata-first**: structure and meaning before raw arrays
+- **Lazy but deterministic**: data is loaded on demand, behavior is predictable
+- **Automotive-oriented**: designed around real measurement workflows, not generic time-series
 
 ---
 
 ## 🎯 Objectives
 
 - Provide a **simple, pythonic API** for working with MDF files
-- Keep the library **fast and memory‑efficient**, suitable for very large measurements
+- Keep the library **fast and memory-efficient**, suitable for very large measurements
 - Improve usability beyond `asammdf` by:
   - Exposing both *physical channels* and *logical segments*
-  - Allowing partial loading, chunking, lazy access
-  - Offering dataframe‑friendly output
-- Serve as a foundation for future analysis tools (e.g. signal processing, event handling)
+  - Allowing partial loading, chunking and lazy access
+  - Offering dataframe-friendly output
+- Act as a foundation for higher-level analysis tools
+  (signal processing, data quality checks, ML-based diagnostics)
 
 ---
 
 ## 📝 Roadmap / TODO
 
 ### I/O Layer
-- [ ] Implement the MDF reader wrapper with:
-  - [ ] Complete segment discovery
-  - [ ] Proper mapping between MDF groups/channels and logical paths
-  - [ ] Efficient lazy data extraction
-- [ ] Add caching for frequently accessed channels
+- [x] Complete MDF reader wrapper
+- [x] Robust segment discovery and classification
+- [x] Mapping between MDF groups/channels and logical paths
+- [ ] Efficient lazy data extraction
+- [ ] Optional caching for frequently accessed channels
 
 ### Core API
-- [ ] Define a clean `EngineMDF` class that:
-  - [ ] Loads metadata once
-  - [ ] Provides a stable API to access channels, segments, ranges
-- [ ] Provide dataframe export utilities (Pandas + Arrow)
+- [ ] Finalize `EngineMDF` high-level interface
+- [ ] Tight integration between MDF data and `Channel`
+- [ ] Range-based and event-based slicing utilities
+- [ ] DataFrame / Arrow export helpers
+
+### Data Quality & Analysis (Future)
+- [ ] Metadata channel detection and separation
+- [ ] Rule-based data quality checks
+- [ ] Hooks for anomaly detection and ML-based validation
 
 ### Performance
-- [ ] Benchmark loading strategies on real automotive datasets
-- [ ] Introduce optional zero‑copy memory access where possible
+- [ ] Benchmark on long acquisitions (hours of data)
+- [ ] Evaluate zero-copy / memory-mapped strategies
 
 ### Documentation
-- [ ] Add usage examples
-- [ ] Add architecture overview
-- [ ] Add contributor guidelines
+- [ ] Usage examples
+- [ ] Core concepts documentation
+- [ ] Architecture overview
+- [ ] Contributor guidelines
 
 ---
 
 ## 🧪 Example (Preview)
 
 ```python
-from enginemdf import EngineMDF
+from enginemdf.core import Channel
 
-mdf = EngineMDF("path/to/file.mdf")
+rpm = Channel(
+    name="engine_speed",
+    time=t,
+    data=x,
+    unit="rpm"
+)
 
-# List logical segments
-for seg in mdf.segments:
-    print(seg.measurement_name, seg.channel_name, seg.n_samples)
+# Slice in time
+rpm_high = rpm.time_slice(t_min=10.0, t_max=20.0)
 
-# Load data lazily
-t, x = seg.loader()
+# Access raw arrays
+t, x = rpm_high.time, rpm_high.data
 ```
 
 > ⚠️ API not final — expect breaking changes.
@@ -79,8 +108,8 @@ t, x = seg.loader()
 
 ## 🤝 Contributing
 
-This is a learning-driven project, contributions and feedback are welcome.  
-If you're using MDF files in the automotive field and have feature suggestions, feel free to open an issue.
+This is a learning-driven project, but feedback and contributions are welcome.  
+If you work with MDF files in the automotive field and have suggestions, feel free to open an issue.
 
 ---
 
