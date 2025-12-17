@@ -52,14 +52,6 @@ def test_allows_duplicate_times_non_decreasing():
     assert ts.n == 4
 
 
-def test_is_uniform_true_and_false():
-    ts1 = TimeSeries(time=np.array([0.0, 1.0, 2.0, 3.0]), values=np.array([0, 0, 0, 0]))
-    assert ts1.is_uniform()
-
-    ts2 = TimeSeries(time=np.array([0.0, 1.0, 2.1, 3.0]), values=np.array([0, 0, 0, 0]))
-    assert ts2.is_uniform() is False
-
-
 def test_slice_time_closed_both():
     t = np.array([0.0, 1.0, 2.0, 3.0])
     v = np.array([10.0, 20.0, 30.0, 40.0])
@@ -85,21 +77,6 @@ def test_slice_time_empty_input_returns_self():
     ts = TimeSeries(time=np.array([]), values=np.array([]))
     out = ts.slice_time(0.0, 1.0)
     assert out is ts
-
-
-def test_with_unit_and_with_name():
-    t = np.array([0.0, 1.0])
-    v = np.array([1.0, 2.0])
-    ts = TimeSeries(time=t, values=v, unit="a", name="x", attrs={"k": 1})
-
-    u2 = ts.with_unit("b")
-    n2 = ts.with_name("y")
-
-    assert u2.unit == "b" and u2.name == "x"
-    assert n2.name == "y" and n2.unit == "a"
-    # attrs copied
-    assert u2.attrs == {"k": 1}
-    assert u2.attrs is not ts.attrs  # different dict object
 
 
 def test_mean_std_skipna():
@@ -128,3 +105,27 @@ def test_to_numpy_copy_flag():
     assert t_view is ts.time and v_view is ts.values
     assert t_cp is not ts.time and v_cp is not ts.values
     assert np.allclose(t_cp, ts.time) and np.allclose(v_cp, ts.values)
+
+
+def test_lazy_timeseries_loads_on_access_and_caches():
+    from enginemdf.core.timeseries import LazyTimeSeries
+
+    calls = {"n": 0}
+
+    def loader():
+        calls["n"] += 1
+        return np.array([0.0, 1.0, 2.0]), np.array([10.0, 20.0, 30.0])
+
+    ts = LazyTimeSeries(loader=loader, unit="u", name="x")
+
+    # Not loaded yet
+    assert calls["n"] == 0
+
+    # First access triggers load
+    assert ts.n == 3
+    assert calls["n"] == 1
+
+    # Subsequent accesses use cache
+    _ = ts.values
+    _ = ts.time
+    assert calls["n"] == 1

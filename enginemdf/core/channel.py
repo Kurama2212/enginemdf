@@ -1,52 +1,33 @@
 # core/channel.py
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+
+from .timeseries import TimeSeriesLike
+from .exceptions import InvalidChannel
+from .metadata import ChannelMeta
 
 import numpy as np
-
-from enginemdf.core.timeseries import TimeSeries
 
 
 class ChannelError(Exception):
     """Base error for Channel-related failures."""
 
 
-class InvalidChannel(ChannelError):
-    """Raised when a Channel is constructed with invalid inputs."""
-
-
-@dataclass(frozen=True, slots=True)
-class ChannelMeta:
-    unit: str | None = None
-    description: str | None = None
-    source: str | None = None
-    attrs: dict[str, Any] = field(default_factory=dict, repr=False)
-
-    def __post_init__(self) -> None:
-        if self.attrs is None:
-            object.__setattr__(self, "attrs", {})
-        elif not isinstance(self.attrs, dict):
-            raise InvalidChannel("ChannelMeta.attrs must be a dict.")
-
-
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True, frozen=True)
 class Channel:
-    """
-    Logical channel = name + TimeSeries + metadata.
-
-    The Channel is what the user interacts with; it should not expose MDF internals.
-    """
     name: str
-    series: TimeSeries = field(repr=False)
-    meta: ChannelMeta = field(default_factory=ChannelMeta, repr=False)
+    series: TimeSeriesLike
+    meta: ChannelMeta = field(default_factory=ChannelMeta)
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
             raise InvalidChannel("Channel.name must be a non-empty string.")
-        if not isinstance(self.series, TimeSeries):
-            raise InvalidChannel("Channel.series must be a TimeSeries instance.")
+
+        if not isinstance(self.series, TimeSeriesLike):
+            raise InvalidChannel("Channel.series must be a TimeSeries-like object.")
+
         if not isinstance(self.meta, ChannelMeta):
             raise InvalidChannel("Channel.meta must be a ChannelMeta instance.")
 
